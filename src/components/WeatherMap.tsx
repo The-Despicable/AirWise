@@ -5,7 +5,10 @@ import { useLocation } from "@/lib/location-context";
 import * as maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 
-// Basemap sources (no API key required - public keyless tiles)
+// CARTO Basemaps API key (from NEXT_PUBLIC_CARTO_API_KEY in .env.local)
+const CARTO_KEY = process.env.NEXT_PUBLIC_CARTO_API_KEY || "";
+
+// Basemap sources
 const BASEMAP_SOURCES = {
   "osm-dark": {
     name: "OpenStreetMap Dark",
@@ -34,6 +37,18 @@ const BASEMAP_SOURCES = {
     tiles: [
       "https://basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png",
       "https://basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png",
+    ],
+    attribution:
+      '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+    maxZoom: 19,
+  },
+  "cartodb-dark": {
+    name: "CartoDB Dark Matter",
+    tiles: [
+      `https://a.basemaps.cartocdn.com/rastertiles/dark_all/{z}/{x}/{y}@2x.png?api_key=${CARTO_KEY}`,
+      `https://b.basemaps.cartocdn.com/rastertiles/dark_all/{z}/{x}/{y}@2x.png?api_key=${CARTO_KEY}`,
+      `https://c.basemaps.cartocdn.com/rastertiles/dark_all/{z}/{x}/{y}@2x.png?api_key=${CARTO_KEY}`,
+      `https://d.basemaps.cartocdn.com/rastertiles/dark_all/{z}/{x}/{y}@2x.png?api_key=${CARTO_KEY}`,
     ],
     attribution:
       '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
@@ -113,7 +128,7 @@ export default function WeatherMap({ activePage }: WeatherMapProps) {
   const animationFrameRef = useRef<number | null>(null);
 
   const [activeLayer, setActiveLayer] = useState<WeatherLayer>("wind");
-  const [basemap, setBasemap] = useState<keyof typeof BASEMAP_SOURCES>("osm-dark");
+  const [basemap, setBasemap] = useState<keyof typeof BASEMAP_SOURCES>("cartodb-dark");
   const [selectedPoint, setSelectedPoint] = useState<WeatherDataPoint | null>(null);
   const [forecastData, setForecastData] = useState<ForecastData | null>(null);
   const [loading, setLoading] = useState(false);
