@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import Image from "next/image";
-import { motion } from "framer-motion";
+import { motion, PanInfo } from "framer-motion";
 import HomeDashboard from "@/components/HomeDashboard";
 import WeatherDetails from "@/components/WeatherDetails";
 import WeatherMap from "@/components/WeatherMap";
@@ -62,7 +62,7 @@ export default function Home() {
     return () => window.removeEventListener("keydown", handleKeyboardNavigation);
   }, []);
 
-  const handleDragEnd = (_: React.MouseEvent<HTMLDivElement> | React.TouchEvent<HTMLDivElement>, info: { offset: { x: number } }) => {
+  const handleDragEnd = (_event: unknown, info: PanInfo) => {
     const swipeThreshold = 50;
     if (info.offset.x < -swipeThreshold && activePage < 2) {
       setActivePage((prev) => prev + 1);

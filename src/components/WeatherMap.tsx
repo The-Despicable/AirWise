@@ -57,10 +57,46 @@ interface WeatherDataPoint {
 }
 
 interface ForecastData {
-  current: Record<string, unknown>;
-  hourly: Record<string, unknown>;
-  daily: Record<string, unknown>;
-  airQuality: Record<string, unknown>;
+  current: {
+    temperature?: number;
+    apparentTemperature?: number;
+    relativeHumidity?: number;
+    weatherCode?: number;
+    isDay?: number;
+    windSpeed?: number;
+    windDirection?: number;
+    windGusts?: number;
+    surfacePressure?: number;
+    cloudCover?: number;
+    precipitation?: number;
+  };
+  hourly: {
+    time?: string[];
+    temperature?: number[];
+    precipitationProbability?: number[];
+    precipitation?: number[];
+    windSpeed?: number[];
+    windDirection?: number[];
+    cloudCover?: number[];
+  };
+  daily: {
+    time?: string[];
+    temperatureMax?: number[];
+    temperatureMin?: number[];
+    precipitationProbabilityMax?: number[];
+    sunrise?: string[];
+    sunset?: string[];
+  };
+  airQuality: {
+    available?: boolean;
+    error?: string | null;
+    data?: {
+      usAqi?: number | null;
+      pm25?: number | null;
+      pm10?: number | null;
+      validTime?: string | null;
+    } | null;
+  };
 }
 
 interface WeatherMapProps {
@@ -623,11 +659,11 @@ export default function WeatherMap({ activePage }: WeatherMapProps) {
             <div className="max-h-48 overflow-y-auto space-y-1">
               {searchResults.map((r: Record<string, unknown>) => (
                 <button
-                  key={r.place_id || `${r.latitude},${r.longitude}`}
+                  key={(r.place_id as string) || `${r.latitude as number},${r.longitude as number}`}
                   onClick={() => selectResult(r)}
                   className="w-full text-left px-3 py-2 text-sm text-white/90 hover:bg-white/10 rounded-lg transition-colors"
                 >
-                  <div className="font-medium">{r.name}</div>
+                  <div className="font-medium">{r.name as string}</div>
                   <div className="text-[10px] text-white/50">{[r.admin1, r.country].filter(Boolean).join(", ")}</div>
                 </button>
               ))}
@@ -761,11 +797,11 @@ export default function WeatherMap({ activePage }: WeatherMapProps) {
             <div className="pt-4 border-t border-white/10">
               <h5 className="text-xs font-semibold tracking-wider uppercase text-white/50 mb-3">Next 24 Hours</h5>
               <div className="flex gap-2 overflow-x-auto pb-2 no-scrollbar">
-                {forecastData.hourly.time.slice(0, 24).map((t: string, i: number) => {
-                  const temp = forecastData.hourly.temperature[i];
-                  const precipProb = forecastData.hourly.precipitationProbability[i];
-                  const windSpd = forecastData.hourly.windSpeed[i];
-                  const windDir = forecastData.hourly.windDirection[i];
+                {forecastData.hourly.time?.slice(0, 24).map((t: string, i: number) => {
+                  const temp = forecastData.hourly.temperature?.[i];
+                  const precipProb = forecastData.hourly.precipitationProbability?.[i];
+                  const windSpd = forecastData.hourly.windSpeed?.[i];
+                  const windDir = forecastData.hourly.windDirection?.[i];
                   const date = new Date(t.replace(" ", "T"));
                   return (
                     <div
@@ -775,7 +811,7 @@ export default function WeatherMap({ activePage }: WeatherMapProps) {
                       <div className="text-[10px] text-white/50 font-mono">{date.getHours()}:00</div>
                       <div className="text-lg font-bold text-white mt-1">{temp}°</div>
                       <div className="text-[10px] text-white/50 mt-1">
-                        💧{precipProb}% 💨{windSpd} {windDirectionToCompass(windDir)}
+                        💧{precipProb}% 💨{windSpd} {windDirectionToCompass(windDir ?? null)}
                       </div>
                     </div>
                   );
@@ -789,16 +825,16 @@ export default function WeatherMap({ activePage }: WeatherMapProps) {
             <div className="pt-4 border-t border-white/10">
               <h5 className="text-xs font-semibold tracking-wider uppercase text-white/50 mb-3">7-Day Forecast</h5>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                {forecastData.daily.time.slice(0, 7).map((t: string, i: number) => {
+                {forecastData.daily.time?.slice(0, 7).map((t: string, i: number) => {
                   const date = new Date(t.replace(" ", "T"));
                   const dayName = date.toLocaleDateString("en-US", { weekday: "short", day: "numeric", month: "short" });
                   return (
                     <div key={t} className="bg-white/5 rounded-xl p-3 text-center border border-white/10">
                       <div className="text-[10px] text-white/50 font-mono">{dayName}</div>
                       <div className="text-sm font-bold text-white mt-1">
-                        {forecastData.daily.temperatureMax[i]}° / {forecastData.daily.temperatureMin[i]}°
+                        {forecastData.daily.temperatureMax?.[i]}° / {forecastData.daily.temperatureMin?.[i]}°
                       </div>
-                      <div className="text-[10px] text-white/50 mt-1">💧{forecastData.daily.precipitationProbabilityMax[i]}%</div>
+                      <div className="text-[10px] text-white/50 mt-1">💧{forecastData.daily.precipitationProbabilityMax?.[i]}%</div>
                     </div>
                   );
                 })}

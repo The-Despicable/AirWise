@@ -331,9 +331,9 @@ export async function GET(req: NextRequest) {
 
   // Normalize the response
   const omWeather = weatherData as OpenMeteoWeatherResponse;
-  const omCurrent = omWeather.current ?? {};
-  const omHourly = omWeather.hourly ?? {};
-  const omDaily = omWeather.daily ?? {};
+  const omCurrent: OpenMeteoCurrent = omWeather.current ?? {};
+  const omHourly: OpenMeteoHourly = omWeather.hourly ?? {};
+  const omDaily: OpenMeteoDaily = omWeather.daily ?? {};
 
   const response: WeatherResponse = {
     requested: { latitude, longitude },
