@@ -3,7 +3,6 @@
 import React, {
   createContext,
   useContext,
-  useState,
   useEffect,
   useRef,
   useCallback,
@@ -130,11 +129,12 @@ export function LocationProvider({ children }: { children: ReactNode }) {
         type: "SET_LOCATION",
         payload: { latitude, longitude, displayName: displayName || `(${latitude.toFixed(4)}, ${longitude.toFixed(4)})`, source: "device", elevation: altitude ?? null },
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
       let message = "Failed to get your location.";
       let permissionDenied = false;
 
-      switch (err.code) {
+      const error = err as { code?: number; message?: string };
+      switch (error.code) {
         case 1: // PERMISSION_DENIED
           message = "Location access was denied. You can search for a city manually.";
           permissionDenied = true;
@@ -146,7 +146,7 @@ export function LocationProvider({ children }: { children: ReactNode }) {
           message = "Location request timed out. Please try again or search manually.";
           break;
         default:
-          message = err.message || "Unknown location error.";
+          message = error.message || "Unknown location error.";
       }
 
       dispatch({ type: "SET_ERROR", payload: message });
@@ -209,9 +209,10 @@ export function LocationProvider({ children }: { children: ReactNode }) {
           elevation: top.elevation ?? null,
         },
       });
-    } catch (err: any) {
-      if (err.name === "AbortError") return;
-      dispatch({ type: "SET_ERROR", payload: err.message || "City search failed." });
+    } catch (err: unknown) {
+      const error = err as { name?: string; message?: string };
+      if (error.name === "AbortError") return;
+      dispatch({ type: "SET_ERROR", payload: error.message || "City search failed." });
     } finally {
       dispatch({ type: "SET_LOADING", payload: false });
     }

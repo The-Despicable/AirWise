@@ -6,10 +6,9 @@ import { useLocation } from "@/lib/location-context";
 
 export default function HomeDashboard() {
   const { state: locationState } = useLocation();
-  const [time, setTime] = useState<Date | null>(null);
+  const [time, setTime] = useState<Date>(() => new Date());
 
   useEffect(() => {
-    setTime(new Date());
     const interval = setInterval(() => setTime(new Date()), 1000);
     return () => clearInterval(interval);
   }, []);

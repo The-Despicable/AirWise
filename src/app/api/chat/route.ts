@@ -152,7 +152,7 @@ BEHAVIOR RULES:
       reply: cleanReply || `I don't have current weather details for ${resolvedName} right now.`,
       location: { latitude: resolvedLat, longitude: resolvedLon, name: resolvedName, isDefault },
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Nemotron 3.5 Lightning Error:", error);
     return NextResponse.json(
       { error: "NVIDIA NIM inference service encountered an error." },

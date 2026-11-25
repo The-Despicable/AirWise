@@ -1,14 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 
 // In-memory cache: key = "lat,lon", value = { data, timestamp }
-const WEATHER_CACHE = new Map<string, { data: any; timestamp: number }>();
+interface CacheEntry {
+  data: WeatherResponse;
+  timestamp: number;
+}
+const WEATHER_CACHE = new Map<string, CacheEntry>();
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
 function getCacheKey(latitude: number, longitude: number): string {
   return `${latitude.toFixed(4)},${longitude.toFixed(4)}`;
 }
 
-function getCachedWeather(key: string): any | null {
+function getCachedWeather(key: string): WeatherResponse | null {
   const entry = WEATHER_CACHE.get(key);
   if (!entry) return null;
   if (Date.now() - entry.timestamp > CACHE_TTL_MS) {
@@ -18,8 +22,132 @@ function getCachedWeather(key: string): any | null {
   return entry.data;
 }
 
-function setCachedWeather(key: string, data: any): void {
+function setCachedWeather(key: string, data: WeatherResponse): void {
   WEATHER_CACHE.set(key, { data, timestamp: Date.now() });
+}
+
+// Type definitions for the weather API response
+interface WeatherCurrent {
+  temperature: number | null;
+  apparentTemperature: number | null;
+  relativeHumidity: number | null;
+  weatherCode: number | null;
+  isDay: number | null;
+  windSpeed: number | null;
+  windDirection: number | null;
+  windGusts: number | null;
+  surfacePressure: number | null;
+  cloudCover: number | null;
+  precipitation: number | null;
+}
+
+interface WeatherHourly {
+  time: string[];
+  temperature: number[];
+  precipitationProbability: number[];
+  precipitation: number[];
+  windSpeed: number[];
+  windDirection: number[];
+  cloudCover: number[];
+}
+
+interface WeatherDaily {
+  time: string[];
+  temperatureMax: number[];
+  temperatureMin: number[];
+  precipitationProbabilityMax: number[];
+  sunrise: string[];
+  sunset: string[];
+}
+
+interface AirQualityData {
+  available: boolean;
+  error: string | null;
+  data: {
+    usAqi: number | null;
+    pm25: number | null;
+    pm10: number | null;
+    validTime: string | null;
+  } | null;
+}
+
+interface WeatherResponse {
+  requested: { latitude: number; longitude: number };
+  grid: { latitude: number | null; longitude: number | null };
+  timezone: string | null;
+  utcOffsetSeconds: number | null;
+  elevation: number | null;
+  fetchedAt: string;
+  validTime: string | null;
+  units: Record<string, string>;
+  current: WeatherCurrent;
+  hourly: WeatherHourly;
+  daily: WeatherDaily;
+  airQuality: AirQualityData;
+  source: {
+    weather: string;
+    airQuality: string;
+    note: string;
+  };
+  fromCache: boolean;
+}
+
+// Open-Meteo API response types
+interface OpenMeteoCurrent {
+  temperature_2m?: number;
+  apparent_temperature?: number;
+  relative_humidity_2m?: number;
+  weather_code?: number;
+  is_day?: number;
+  wind_speed_10m?: number;
+  wind_direction_10m?: number;
+  wind_gusts_10m?: number;
+  surface_pressure?: number;
+  cloud_cover?: number;
+  precipitation?: number;
+  time?: string;
+}
+
+interface OpenMeteoHourly {
+  time?: string[];
+  temperature_2m?: number[];
+  precipitation_probability?: number[];
+  precipitation?: number[];
+  wind_speed_10m?: number[];
+  wind_direction_10m?: number[];
+  cloud_cover?: number[];
+}
+
+interface OpenMeteoDaily {
+  time?: string[];
+  temperature_2m_max?: number[];
+  temperature_2m_min?: number[];
+  precipitation_probability_max?: number[];
+  sunrise?: string[];
+  sunset?: string[];
+}
+
+interface OpenMeteoWeatherResponse {
+  current?: OpenMeteoCurrent;
+  hourly?: OpenMeteoHourly;
+  daily?: OpenMeteoDaily;
+  current_units?: Record<string, string>;
+  latitude?: number;
+  longitude?: number;
+  timezone?: string;
+  utc_offset_seconds?: number;
+  elevation?: number;
+}
+
+interface OpenMeteoAirQualityCurrent {
+  us_aqi?: number;
+  pm2_5?: number;
+  pm10?: number;
+  time?: string;
+}
+
+interface OpenMeteoAirQualityResponse {
+  current?: OpenMeteoAirQualityCurrent;
 }
 
 function validateCoordinate(
@@ -131,7 +259,19 @@ export async function GET(req: NextRequest) {
     ].join(",")
   );
 
-  let weatherData: any;
+  interface OpenMeteoWeatherResponse {
+    current?: Record<string, unknown>;
+    hourly?: Record<string, unknown>;
+    daily?: Record<string, unknown>;
+    current_units?: Record<string, string>;
+    latitude?: number;
+    longitude?: number;
+    timezone?: string;
+    utc_offset_seconds?: number;
+    elevation?: number;
+  }
+
+  let weatherData: OpenMeteoWeatherResponse;
   let weatherRawTimestamp: string | null = null;
 
   try {
@@ -144,19 +284,29 @@ export async function GET(req: NextRequest) {
       );
     }
     weatherData = await weatherResponse.json();
-    weatherRawTimestamp = weatherData?.current?.time ?? null;
-  } catch (err: any) {
-    if (err.name === "AbortError") {
+    weatherRawTimestamp = (weatherData.current?.time as string) ?? null;
+  } catch (err: unknown) {
+    if (err instanceof Error && err.name === "AbortError") {
       return NextResponse.json({ error: "Weather request timed out." }, { status: 504 });
     }
+    const message = err instanceof Error ? err.message : "Unknown error";
     return NextResponse.json(
-      { error: "Failed to fetch weather data.", details: err.message },
+      { error: "Failed to fetch weather data.", details: message },
       { status: 502 }
     );
   }
 
+  interface OpenMeteoAirQualityResponse {
+    current?: {
+      us_aqi?: number;
+      pm2_5?: number;
+      pm10?: number;
+      time?: string;
+    };
+  }
+
   // Fetch air quality from the separate Open-Meteo Air Quality API
-  let airQualityData: any = null;
+  let airQualityData: OpenMeteoAirQualityResponse | null = null;
   let airQualityAvailable = false;
   let airQualityError: string | null = null;
 
@@ -174,17 +324,18 @@ export async function GET(req: NextRequest) {
       airQualityData = await aqResponse.json();
       airQualityAvailable = true;
     }
-  } catch (err: any) {
+  } catch (err: unknown) {
     // Air-quality failure must not discard successful weather data
-    airQualityError = err.name === "AbortError" ? "Air quality request timed out." : err.message;
+    airQualityError = err instanceof Error && err.name === "AbortError" ? "Air quality request timed out." : (err instanceof Error ? err.message : "Unknown error");
   }
 
   // Normalize the response
-  const current = weatherData?.current ?? {};
-  const hourly = weatherData?.hourly ?? {};
-  const daily = weatherData?.daily ?? {};
+  const omWeather = weatherData as OpenMeteoWeatherResponse;
+  const omCurrent = omWeather.current ?? {};
+  const omHourly = omWeather.hourly ?? {};
+  const omDaily = omWeather.daily ?? {};
 
-  const response: any = {
+  const response: WeatherResponse = {
     requested: { latitude, longitude },
     grid: {
       latitude: weatherData?.latitude ?? null,
@@ -197,34 +348,34 @@ export async function GET(req: NextRequest) {
     validTime: weatherRawTimestamp,
     units: weatherData?.current_units ?? {},
     current: {
-      temperature: current.temperature_2m ?? null,
-      apparentTemperature: current.apparent_temperature ?? null,
-      relativeHumidity: current.relative_humidity_2m ?? null,
-      weatherCode: current.weather_code ?? null,
-      isDay: current.is_day ?? null,
-      windSpeed: current.wind_speed_10m ?? null,
-      windDirection: current.wind_direction_10m ?? null,
-      windGusts: current.wind_gusts_10m ?? null,
-      surfacePressure: current.surface_pressure ?? null,
-      cloudCover: current.cloud_cover ?? null,
-      precipitation: current.precipitation ?? null,
+      temperature: omCurrent.temperature_2m ?? null,
+      apparentTemperature: omCurrent.apparent_temperature ?? null,
+      relativeHumidity: omCurrent.relative_humidity_2m ?? null,
+      weatherCode: omCurrent.weather_code ?? null,
+      isDay: omCurrent.is_day ?? null,
+      windSpeed: omCurrent.wind_speed_10m ?? null,
+      windDirection: omCurrent.wind_direction_10m ?? null,
+      windGusts: omCurrent.wind_gusts_10m ?? null,
+      surfacePressure: omCurrent.surface_pressure ?? null,
+      cloudCover: omCurrent.cloud_cover ?? null,
+      precipitation: omCurrent.precipitation ?? null,
     },
     hourly: {
-      time: hourly.time ?? [],
-      temperature: hourly.temperature_2m ?? [],
-      precipitationProbability: hourly.precipitation_probability ?? [],
-      precipitation: hourly.precipitation ?? [],
-      windSpeed: hourly.wind_speed_10m ?? [],
-      windDirection: hourly.wind_direction_10m ?? [],
-      cloudCover: hourly.cloud_cover ?? [],
+      time: omHourly.time ?? [],
+      temperature: omHourly.temperature_2m ?? [],
+      precipitationProbability: omHourly.precipitation_probability ?? [],
+      precipitation: omHourly.precipitation ?? [],
+      windSpeed: omHourly.wind_speed_10m ?? [],
+      windDirection: omHourly.wind_direction_10m ?? [],
+      cloudCover: omHourly.cloud_cover ?? [],
     },
     daily: {
-      time: daily.time ?? [],
-      temperatureMax: daily.temperature_2m_max ?? [],
-      temperatureMin: daily.temperature_2m_min ?? [],
-      precipitationProbabilityMax: daily.precipitation_probability_max ?? [],
-      sunrise: daily.sunrise ?? [],
-      sunset: daily.sunset ?? [],
+      time: omDaily.time ?? [],
+      temperatureMax: omDaily.temperature_2m_max ?? [],
+      temperatureMin: omDaily.temperature_2m_min ?? [],
+      precipitationProbabilityMax: omDaily.precipitation_probability_max ?? [],
+      sunrise: omDaily.sunrise ?? [],
+      sunset: omDaily.sunset ?? [],
     },
     airQuality: {
       available: airQualityAvailable,

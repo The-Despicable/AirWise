@@ -5,8 +5,6 @@ import { useLocation } from "@/lib/location-context";
 import * as maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 
-const MAPTILER_KEY = process.env.NEXT_PUBLIC_MAPTILER_KEY;
-
 // Basemap sources (no API key required - public keyless tiles)
 const BASEMAP_SOURCES = {
   "osm-dark": {
@@ -58,10 +56,11 @@ interface WeatherDataPoint {
   weatherCode: number | null;
 }
 
-interface MapMarker {
-  id: string;
-  lngLat: [number, number];
-  data: WeatherDataPoint;
+interface ForecastData {
+  current: Record<string, unknown>;
+  hourly: Record<string, unknown>;
+  daily: Record<string, unknown>;
+  airQuality: Record<string, unknown>;
 }
 
 interface WeatherMapProps {
@@ -69,7 +68,7 @@ interface WeatherMapProps {
 }
 
 export default function WeatherMap({ activePage }: WeatherMapProps) {
-  const { state: locationState, setLocationFromDevice, setManualLocation, searchCity } = useLocation();
+  const { state: locationState, setLocationFromDevice, setManualLocation } = useLocation();
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const markerRef = useRef<maplibregl.Marker | null>(null);
@@ -80,17 +79,12 @@ export default function WeatherMap({ activePage }: WeatherMapProps) {
   const [activeLayer, setActiveLayer] = useState<WeatherLayer>("wind");
   const [basemap, setBasemap] = useState<keyof typeof BASEMAP_SOURCES>("osm-dark");
   const [selectedPoint, setSelectedPoint] = useState<WeatherDataPoint | null>(null);
-  const [forecastData, setForecastData] = useState<{
-    current: any;
-    hourly: any;
-    daily: any;
-    airQuality: any;
-  } | null>(null);
+  const [forecastData, setForecastData] = useState<ForecastData | null>(null);
   const [loading, setLoading] = useState(false);
   const [mapError, setMapError] = useState<string | null>(null);
   const [showCitySearch, setShowCitySearch] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
-  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [searchResults, setSearchResults] = useState<Array<Record<string, unknown>>>([]);
   const [searchLoading, setSearchLoading] = useState(false);
   const [mapInitialized, setMapInitialized] = useState(false);
   const mapLoadedRef = useRef(false);
@@ -126,12 +120,117 @@ export default function WeatherMap({ activePage }: WeatherMapProps) {
 
       setSelectedPoint(pointData);
       setForecastData({ current, hourly, daily, airQuality: aq });
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Weather fetch failed:", err);
     } finally {
       setLoading(false);
     }
   }, []);
+
+  // Helper functions (defined before useEffects that reference them)
+  function getMarkerColor(layer: WeatherLayer): string {
+    switch (layer) {
+      case "wind": return "#60a5fa";
+      case "thermal": return "#fb923c";
+      case "aqi": return "#34d399";
+    }
+  }
+
+  function getAqiCategory(aqi: number | null): { label: string; color: string } {
+    if (aqi === null) return { label: "Unavailable", color: "text-white/40" };
+    if (aqi <= 50) return { label: "Good", color: "text-emerald-400" };
+    if (aqi <= 100) return { label: "Moderate", color: "text-amber-400" };
+    if (aqi <= 150) return { label: "Unhealthy for Sensitive Groups", color: "text-rose-400" };
+    if (aqi <= 200) return { label: "Unhealthy", color: "text-red-400" };
+    if (aqi <= 300) return { label: "Very Unhealthy", color: "text-purple-400" };
+    return { label: "Hazardous", color: "text-maroon-400" };
+  }
+
+  function windDirectionToCompass(degrees: number | null): string {
+    if (degrees === null) return "--";
+    const dirs = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"];
+    return dirs[Math.round(degrees / 22.5) % 16];
+  }
+
+  function weatherCodeToCondition(code: number | null): string {
+    if (code === null) return "Unknown";
+    const codes: Record<number, string> = {
+      0: "Clear sky", 1: "Mainly clear", 2: "Partly cloudy", 3: "Overcast",
+      45: "Fog", 48: "Depositing rime fog", 51: "Light drizzle", 53: "Moderate drizzle",
+      55: "Dense drizzle", 56: "Light freezing drizzle", 57: "Dense freezing drizzle",
+      61: "Slight rain", 63: "Moderate rain", 65: "Heavy rain", 66: "Light freezing rain",
+      67: "Heavy freezing rain", 71: "Slight snow fall", 73: "Moderate snow fall",
+      75: "Heavy snow fall", 77: "Snow grains", 80: "Slight rain showers",
+      81: "Moderate rain showers", 82: "Violent rain showers", 85: "Slight snow showers",
+      86: "Heavy snow showers", 95: "Thunderstorm", 96: "Thunderstorm with slight hail",
+      99: "Thunderstorm with heavy hail",
+    };
+    return codes[code] ?? `Code ${code}`;
+  }
+
+  function getPopupContent(point: WeatherDataPoint): string {
+    const aqiCat = getAqiCategory(point.aqi);
+    const condition = weatherCodeToCondition(point.weatherCode);
+    const windCompass = windDirectionToCompass(point.windDirection);
+    return `
+      <div style="min-width: 200px; font-family: system-ui, sans-serif;">
+        <div style="font-weight: 600; margin-bottom: 4px;">${point.placeName}</div>
+        <div style="font-size: 12px; color: #888; margin-bottom: 8px;">
+          ${point.latitude.toFixed(4)}, ${point.longitude.toFixed(4)} ${point.elevation ? `• ${point.elevation}m` : ""}
+        </div>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 4px; font-size: 12px;">
+          <div>Temp: <b>${point.temperature}°C</b></div>
+          <div>Wind: <b>${point.windSpeed} km/h ${windCompass}</b></div>
+          <div>Condition: <b>${condition}</b></div>
+          <div>AQI: <b style="color: ${aqiCat.color}">${point.aqi ?? "—"} ${aqiCat.label}</b></div>
+        </div>
+      </div>
+    `;
+  }
+
+  async function reverseGeocode(lng: number, lat: number): Promise<string | null> {
+    try {
+      const url = new URL("https://geocoding-api.open-meteo.com/v1/reverse");
+      url.searchParams.set("latitude", lat.toString());
+      url.searchParams.set("longitude", lng.toString());
+      url.searchParams.set("language", "en");
+      url.searchParams.set("format", "json");
+      const res = await fetch(url.toString());
+      const data = await res.json();
+      if (data.results?.length) {
+        const r = data.results[0];
+        return [r.name, r.admin1, r.country].filter(Boolean).join(", ");
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  // Update marker position
+  const updateMarker = (lng: number, lat: number) => {
+    if (!mapRef.current) return;
+
+    if (markerRef.current) {
+      markerRef.current.setLngLat([lng, lat]);
+    } else {
+      markerRef.current = new maplibregl.Marker({ color: getMarkerColor(activeLayer), scale: 1.2 })
+        .setLngLat([lng, lat])
+        .addTo(mapRef.current);
+    }
+
+    // Update popup
+    if (selectedPoint) {
+      if (popupRef.current) {
+        popupRef.current.setLngLat([lng, lat]).setHTML(getPopupContent(selectedPoint));
+      } else {
+        popupRef.current = new maplibregl.Popup({ closeButton: false, closeOnClick: false })
+          .setLngLat([lng, lat])
+          .setHTML(getPopupContent(selectedPoint))
+          .addTo(mapRef.current);
+      }
+    }
+  };
 
   // Initialize map - runs ONCE on mount
   useEffect(() => {
@@ -214,7 +313,7 @@ export default function WeatherMap({ activePage }: WeatherMapProps) {
       fetchWeather(lat, lng, placeName);
     });
 
-    map.on("error", (e: any) => {
+    map.on("error", (e: { error?: { status?: number; message?: string } }) => {
       // Only show error banner if the primary style failed to load entirely
       if (e?.error?.status === 401 || e?.error?.message?.includes("Style")) {
         setMapError("Failed to load map style. Check your connection.");
@@ -249,6 +348,7 @@ export default function WeatherMap({ activePage }: WeatherMapProps) {
   }, []);
 
   // Handle basemap switching without destroying the map
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapLoadedRef.current) return;
@@ -272,6 +372,7 @@ export default function WeatherMap({ activePage }: WeatherMapProps) {
     });
     updateMarker(locationState.longitude, locationState.latitude);
     fetchWeather(locationState.latitude, locationState.longitude, locationState.displayName || "Selected location");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [locationState.latitude, locationState.longitude]);
 
 
@@ -285,31 +386,6 @@ export default function WeatherMap({ activePage }: WeatherMapProps) {
       return () => clearTimeout(timer);
     }
   }, [activePage]);
-
-  // Update marker position
-  const updateMarker = (lng: number, lat: number) => {
-    if (!mapRef.current) return;
-
-    if (markerRef.current) {
-      markerRef.current.setLngLat([lng, lat]);
-    } else {
-      markerRef.current = new maplibregl.Marker({ color: getMarkerColor(activeLayer), scale: 1.2 })
-        .setLngLat([lng, lat])
-        .addTo(mapRef.current);
-    }
-
-    // Update popup
-    if (selectedPoint) {
-      if (popupRef.current) {
-        popupRef.current.setLngLat([lng, lat]).setHTML(getPopupContent(selectedPoint));
-      } else {
-        popupRef.current = new maplibregl.Popup({ closeButton: false, closeOnClick: false })
-          .setLngLat([lng, lat])
-          .setHTML(getPopupContent(selectedPoint))
-          .addTo(mapRef.current);
-      }
-    }
-  };
 
   // Sync canvas overlay on map move/zoom
   useEffect(() => {
@@ -342,7 +418,7 @@ export default function WeatherMap({ activePage }: WeatherMapProps) {
       map.off("zoom", sync);
       map.off("rotate", sync);
     };
-  }, [mapLoadedRef.current]);
+  }, []);
 
   // Wind animation on canvas overlay
   useEffect(() => {
@@ -424,10 +500,10 @@ export default function WeatherMap({ activePage }: WeatherMapProps) {
     }
   };
 
-  const selectResult = (result: any) => {
-    const nameParts = [result.name, result.admin1, result.country].filter(Boolean);
+  const selectResult = (result: Record<string, unknown>) => {
+    const nameParts = [(result.name as string), (result.admin1 as string), (result.country as string)].filter(Boolean);
     const displayName = nameParts.join(", ");
-    setManualLocation(result.latitude, result.longitude, displayName, result.elevation ?? null);
+    setManualLocation(result.latitude as number, result.longitude as number, displayName, result.elevation as number | null ?? null);
     setShowCitySearch(false);
     setSearchQuery("");
     setSearchResults([]);
@@ -444,6 +520,7 @@ export default function WeatherMap({ activePage }: WeatherMapProps) {
       updateMarker(locationState.longitude, locationState.latitude);
       fetchWeather(locationState.latitude, locationState.longitude, locationState.displayName || "Selected location");
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [locationState.latitude, locationState.longitude, locationState.source]);
 
   // Cleanup on unmount
@@ -453,86 +530,6 @@ export default function WeatherMap({ activePage }: WeatherMapProps) {
       mapRef.current?.remove();
     };
   }, []);
-
-  // Legend colors
-  function getMarkerColor(layer: WeatherLayer): string {
-    switch (layer) {
-      case "wind": return "#60a5fa"; // blue
-      case "thermal": return "#fb923c"; // orange
-      case "aqi": return "#34d399"; // green
-    }
-  }
-
-  function getAqiCategory(aqi: number | null): { label: string; color: string } {
-    if (aqi === null) return { label: "Unavailable", color: "text-white/40" };
-    if (aqi <= 50) return { label: "Good", color: "text-emerald-400" };
-    if (aqi <= 100) return { label: "Moderate", color: "text-amber-400" };
-    if (aqi <= 150) return { label: "Unhealthy for Sensitive Groups", color: "text-rose-400" };
-    if (aqi <= 200) return { label: "Unhealthy", color: "text-red-400" };
-    if (aqi <= 300) return { label: "Very Unhealthy", color: "text-purple-400" };
-    return { label: "Hazardous", color: "text-maroon-400" };
-  }
-
-  function windDirectionToCompass(degrees: number | null): string {
-    if (degrees === null) return "--";
-    const dirs = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"];
-    return dirs[Math.round(degrees / 22.5) % 16];
-  }
-
-  function weatherCodeToCondition(code: number | null): string {
-    if (code === null) return "Unknown";
-    const codes: Record<number, string> = {
-      0: "Clear sky", 1: "Mainly clear", 2: "Partly cloudy", 3: "Overcast",
-      45: "Fog", 48: "Depositing rime fog", 51: "Light drizzle", 53: "Moderate drizzle",
-      55: "Dense drizzle", 56: "Light freezing drizzle", 57: "Dense freezing drizzle",
-      61: "Slight rain", 63: "Moderate rain", 65: "Heavy rain", 66: "Light freezing rain",
-      67: "Heavy freezing rain", 71: "Slight snow fall", 73: "Moderate snow fall",
-      75: "Heavy snow fall", 77: "Snow grains", 80: "Slight rain showers",
-      81: "Moderate rain showers", 82: "Violent rain showers", 85: "Slight snow showers",
-      86: "Heavy snow showers", 95: "Thunderstorm", 96: "Thunderstorm with slight hail",
-      99: "Thunderstorm with heavy hail",
-    };
-    return codes[code] ?? `Code ${code}`;
-  }
-
-  function getPopupContent(point: WeatherDataPoint): string {
-    const aqiCat = getAqiCategory(point.aqi);
-    const condition = weatherCodeToCondition(point.weatherCode);
-    const windCompass = windDirectionToCompass(point.windDirection);
-    return `
-      <div style="min-width: 200px; font-family: system-ui, sans-serif;">
-        <div style="font-weight: 600; margin-bottom: 4px;">${point.placeName}</div>
-        <div style="font-size: 12px; color: #888; margin-bottom: 8px;">
-          ${point.latitude.toFixed(4)}, ${point.longitude.toFixed(4)} ${point.elevation ? `• ${point.elevation}m` : ""}
-        </div>
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 4px; font-size: 12px;">
-          <div>Temp: <b>${point.temperature}°C</b></div>
-          <div>Wind: <b>${point.windSpeed} km/h ${windCompass}</b></div>
-          <div>Condition: <b>${condition}</b></div>
-          <div>AQI: <b style="color: ${aqiCat.color}">${point.aqi ?? "—"} ${aqiCat.label}</b></div>
-        </div>
-      </div>
-    `;
-  }
-
-  async function reverseGeocode(lng: number, lat: number): Promise<string | null> {
-    try {
-      const url = new URL("https://geocoding-api.open-meteo.com/v1/reverse");
-      url.searchParams.set("latitude", lat.toString());
-      url.searchParams.set("longitude", lng.toString());
-      url.searchParams.set("language", "en");
-      url.searchParams.set("format", "json");
-      const res = await fetch(url.toString());
-      const data = await res.json();
-      if (data.results?.length) {
-        const r = data.results[0];
-        return [r.name, r.admin1, r.country].filter(Boolean).join(", ");
-      }
-      return null;
-    } catch {
-      return null;
-    }
-  }
 
   return (
     <div className="w-full min-h-screen overflow-y-auto px-4 sm:px-8 pt-20 pb-36 max-w-6xl mx-auto flex flex-col gap-6 select-none pointer-events-auto">
@@ -624,7 +621,7 @@ export default function WeatherMap({ activePage }: WeatherMapProps) {
           </form>
           {searchResults.length > 0 && (
             <div className="max-h-48 overflow-y-auto space-y-1">
-              {searchResults.map((r: any) => (
+              {searchResults.map((r: Record<string, unknown>) => (
                 <button
                   key={r.place_id || `${r.latitude},${r.longitude}`}
                   onClick={() => selectResult(r)}

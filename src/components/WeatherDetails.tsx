@@ -47,13 +47,9 @@ interface WeatherData {
   };
 }
 
-function safeGet<T extends object, K extends keyof T>(obj: T | undefined, key: K, fallback: T[K]): T[K] {
-  return obj && key in obj ? obj[key] : fallback;
-}
-
 export default function WeatherDetails() {
   const { state: locationState } = useLocation();
-  const { speak, stop, isSpeaking, isSupported } = useTTS();
+  const { speak, isSpeaking, isSupported } = useTTS();
   const [weatherData, setWeatherData] = useState<WeatherData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -78,8 +74,9 @@ export default function WeatherDetails() {
         }
         const data = await response.json();
         setWeatherData(data as WeatherData);
-      } catch (err: any) {
-        setError(err.message || "Failed to load weather data");
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : "Failed to load weather data";
+        setError(message);
       } finally {
         setLoading(false);
       }

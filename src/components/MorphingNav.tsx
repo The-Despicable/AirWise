@@ -83,7 +83,7 @@ export default function MorphingNav() {
     if (!query || isTyping) return;
 
     const userMessage: Message = {
-      id: `u-${Date.now()}`,
+      id: `u-${crypto.randomUUID()}`,
       sender: "user",
       text: query,
       time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
@@ -116,18 +116,18 @@ export default function MorphingNav() {
       setMessages((prev) => [
         ...prev,
         {
-          id: `a-${Date.now()}`,
+          id: `a-${crypto.randomUUID()}`,
           sender: "agent",
           text: reply,
           time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
         },
       ]);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Chat communication failure:", err);
       setMessages((prev) => [
         ...prev,
         {
-          id: `a-${Date.now()}`,
+          id: `a-${crypto.randomUUID()}`,
           sender: "agent",
           text: "Unable to reach the backend service. Please check that NVIDIA_NIM_API_KEY is configured.",
           time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),

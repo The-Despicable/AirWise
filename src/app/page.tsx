@@ -62,7 +62,7 @@ export default function Home() {
     return () => window.removeEventListener("keydown", handleKeyboardNavigation);
   }, []);
 
-  const handleDragEnd = (_: any, info: { offset: { x: number } }) => {
+  const handleDragEnd = (_: React.MouseEvent<HTMLDivElement> | React.TouchEvent<HTMLDivElement>, info: { offset: { x: number } }) => {
     const swipeThreshold = 50;
     if (info.offset.x < -swipeThreshold && activePage < 2) {
       setActivePage((prev) => prev + 1);
