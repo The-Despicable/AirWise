@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import Image from "next/image";
-import { motion, PanInfo } from "framer-motion";
+import { motion } from "framer-motion";
 import HomeDashboard from "@/components/HomeDashboard";
 import WeatherDetails from "@/components/WeatherDetails";
 import WeatherMap from "@/components/WeatherMap";
@@ -61,16 +61,6 @@ export default function Home() {
     window.addEventListener("keydown", handleKeyboardNavigation);
     return () => window.removeEventListener("keydown", handleKeyboardNavigation);
   }, []);
-
-  const handleDragEnd = (_event: unknown, info: PanInfo) => {
-    const swipeThreshold = 50;
-    if (info.offset.x < -swipeThreshold && activePage < 2) {
-      setActivePage((prev) => prev + 1);
-    } else if (info.offset.x > swipeThreshold && activePage > 0) {
-      setActivePage((prev) => prev - 1);
-    }
-  };
-
   return (
     <LocationProvider>
       <OnboardingGate />
@@ -114,15 +104,11 @@ export default function Home() {
 
       {/* 3-Screen Horizontal Carousel Track */}
       <motion.div
-        drag="x"
-        dragConstraints={{ left: 0, right: 0 }}
-        dragElastic={0.15}
-        onDragEnd={handleDragEnd}
         animate={{
           x: activePage === 0 ? "0%" : activePage === 1 ? "-33.333%" : "-66.666%",
         }}
         transition={{ type: "spring", stiffness: 320, damping: 32 }}
-        className="relative z-10 flex w-[300vw] h-full cursor-grab active:cursor-grabbing"
+        className="relative z-10 flex w-[300vw] h-full"
       >
         {/* Screen 0: Clock & Welcome Greeting */}
         <section className="w-[100vw] h-full flex-shrink-0 overflow-hidden flex items-center justify-center">
