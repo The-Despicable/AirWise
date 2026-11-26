@@ -90,3 +90,9 @@ omp-session-*.html
 pi-session-*.html
 *.wav
 *.har
+
+# Playwright test files
+tests/
+test-results/
+playwright.config.ts
+playwright-report/
