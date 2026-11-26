@@ -8,7 +8,7 @@ import WeatherDetails from "@/components/WeatherDetails";
 import WeatherMap from "@/components/WeatherMap";
 import MorphingNav from "@/components/MorphingNav";
 import { LocationProvider } from "@/lib/location-context";
-
+import { OnboardingGate } from "@/components/OnboardingGate";
 export default function Home() {
   const [activePage, setActivePage] = useState<number>(0); // 0 = Clock, 1 = Metrics, 2 = Geological Map
 
@@ -73,8 +73,8 @@ export default function Home() {
 
   return (
     <LocationProvider>
+      <OnboardingGate />
       <main className="relative w-screen h-screen overflow-hidden bg-neutral-950 select-none">
-      {/* Background Image */}
       <Image
         src="/hero-bg.jpg"
         alt="Background"

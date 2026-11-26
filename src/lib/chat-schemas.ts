@@ -16,6 +16,7 @@ export interface ChatRequest {
   longitude: number;
   locationName?: string;
   history?: ChatMessage[];
+  profile?: { name?: string; contexts?: string[] };
 }
 
 export interface ChatLocation {
@@ -212,6 +213,25 @@ export function validateChatRequest(
     }
   }
 
+  // profile: optional object with name and contexts
+  let profile: ChatRequest["profile"] | undefined;
+  if (b.profile !== undefined) {
+    if (!b.profile || typeof b.profile !== "object") {
+      return { ok: false, error: "profile must be an object." };
+    }
+    const p = b.profile as Record<string, unknown>;
+    const name = typeof p.name === "string" ? p.name.trim().slice(0, 40) : undefined;
+    let contexts: string[] | undefined;
+    if (Array.isArray(p.contexts)) {
+      contexts = p.contexts
+        .filter((c) => typeof c === "string")
+        .slice(0, 5);
+    }
+    if (name || contexts?.length) {
+      profile = { name, contexts };
+    }
+  }
+
   return {
     ok: true,
     data: {
@@ -220,6 +240,7 @@ export function validateChatRequest(
       longitude,
       locationName,
       history: history ?? [],
+      profile,
     },
   };
 }

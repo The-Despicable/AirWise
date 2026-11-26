@@ -36,9 +36,11 @@ yarn-error.log*
 # vercel
 .vercel
 
-# typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# recovery folder (local only)
+.recovery/
 
 # browser profiles and session caches
 */perplexity-profile/
@@ -76,3 +78,15 @@ next-env.d.ts
 **/*.ldb
 **/*.log
 **/MANIFEST*
+
+# publish-safety additions
+!.env.example
+.next
+node_modules
+coverage
+*.log
+*.key
+omp-session-*.html
+pi-session-*.html
+*.wav
+*.har

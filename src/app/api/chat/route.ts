@@ -26,6 +26,7 @@ import {
   DiagnosticReason,
 } from "@/lib/diagnostics";
 import { resolveLocationName } from "@/lib/geocode";
+import { parseChatProfile, buildProfileBlock } from "@/lib/profile";
 
 // In-memory rate limiter (per IP, sliding window)
 const RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute
@@ -177,13 +178,17 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     );
   }
 
-  const chatReq: ChatRequest = validation.data!;
+const chatReq: ChatRequest = validation.data!;
 
-  // Resolve location name (independent of conversation history)
-  let resolvedName: string;
-  let isDefault = false;
+// Parse profile from request
+const profile = parseChatProfile(chatReq.profile);
+const profileBlock = buildProfileBlock(profile);
 
-  if (chatReq.locationName) {
+// Resolve location name (independent of conversation history)
+let resolvedName: string;
+let isDefault = false;
+
+if (chatReq.locationName) {
     resolvedName = chatReq.locationName;
     isDefault = chatReq.locationName.includes("(default)");
   } else {
@@ -203,7 +208,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     chatReq.message,
     env,
     chatReq.history ?? [],
-    VALIDATION.HISTORY_MAX_TURNS
+    VALIDATION.HISTORY_MAX_TURNS,
+    profileBlock
   );
 
   // NIM adapter

@@ -25,7 +25,8 @@ export function buildChatMessages(
   userQuestion: string,
   env: NormalizedEnv,
   history: ChatMessage[],
-  maxHistoryTurns: number = VALIDATION.HISTORY_MAX_TURNS
+  maxHistoryTurns: number = VALIDATION.HISTORY_MAX_TURNS,
+  profileBlock?: string
 ): BuiltMessages {
   // 1. Authoritative system prompt (server-built)
   const systemPrompt = SYSTEM_PROMPT;
@@ -36,9 +37,10 @@ export function buildChatMessages(
   const maxHistoryMessages = maxHistoryTurns * 2;
   const boundedHistory = history.slice(-maxHistoryMessages);
 
-  // 3. Build current user message with environmental context
+  // 3. Build current user message with environmental context and profile
   const envContext = formatEnvForPrompt(env);
-  const userMessage = `${envContext} ${userQuestion}`;
+  const profilePart = profileBlock ? ` ${profileBlock}` : "";
+  const userMessage = `${envContext}${profilePart} ${userQuestion}`;
 
   // 4. Assemble messages: system + bounded history + current user
   const messages: ChatMessage[] = [

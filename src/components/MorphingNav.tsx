@@ -9,7 +9,7 @@ import React, {
 import { motion, AnimatePresence } from "framer-motion";
 import { useLocation } from "@/lib/location-context";
 import { useTTS } from "@/lib/use-tts";
-
+import { useProfile } from "@/lib/useProfile";
 interface Message {
   id: string;
   sender: "user" | "agent";
@@ -54,6 +54,7 @@ const PROMPT_SUGGESTIONS = [
 export default function MorphingNav() {
   const { state: locationState } = useLocation();
   const { speak, stop, isSpeaking, isSupported } = useTTS();
+  const profile = useProfile();
   const [isOpen, setIsOpen] = useState(false);
   const [isLocked, setIsLocked] = useState(false);
   const [messages, setMessages] = useState<Message[]>(INITIAL_MESSAGES);
@@ -190,6 +191,7 @@ export default function MorphingNav() {
           longitude: locationState.longitude,
           locationName: locationState.displayName,
           history: historyForAPI,
+          profile: profile ? { name: profile.name, contexts: profile.contexts } : undefined,
         }),
       });
 
@@ -311,7 +313,9 @@ export default function MorphingNav() {
                     <span className="absolute w-4 h-4 rounded-full bg-emerald-400/20 animate-ping" />
                   </div>
                   <div>
-                    <h4 className="text-sm font-semibold text-white tracking-tight">AI Assistant</h4>
+                    <h4 className="text-sm font-semibold text-white tracking-tight">
+                      AI Assistant{profile?.name ? `, ${profile.name}` : ""}
+                    </h4>
                     <p className="text-[10px] text-emerald-400/90 font-medium tracking-wider uppercase">
                       Nemotron 3.5 Lightning
                     </p>
