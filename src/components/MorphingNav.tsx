@@ -1,6 +1,11 @@
 "use client";
 
-import React, { useState, useRef, useEffect, useCallback } from "react";
+import React, {
+  useState,
+  useRef,
+  useEffect,
+  useCallback,
+} from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useLocation } from "@/lib/location-context";
 import { useTTS } from "@/lib/use-tts";
@@ -10,6 +15,25 @@ interface Message {
   sender: "user" | "agent";
   text: string;
   time: string;
+  // Distinguish model answers from data-only summaries for visual styling only
+  source?: "model" | "data_only" | "error";
+}
+
+interface ChatAPIResponse {
+  status: "ok" | "degraded" | "error";
+  source?: "model" | "data_only" | "error";
+  requestId: string;
+  reply: string;
+  reason?: string;
+  location?: {
+    latitude: number;
+    longitude: number;
+    name: string;
+    isDefault: boolean;
+  };
+  dataSummary?: Record<string, unknown>;
+  error?: string;
+  code?: string;
 }
 
 const INITIAL_MESSAGES: Message[] = [
@@ -36,7 +60,18 @@ export default function MorphingNav() {
   const [inputVal, setInputVal] = useState("");
   const [isTyping, setIsTyping] = useState(false);
 
-  const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+  // Stale response protection: track latest request ID
+  const latestRequestIdRef = useRef<string | null>(null);
+  // Pending flag to prevent duplicate submissions
+  const isSubmittingRef = useRef(false);
+  // Mirror of messages state for synchronous access in handleSend
+  const messagesRef = useRef<Message[]>(INITIAL_MESSAGES);
+  // Keep ref in sync with state
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
   const scrollToBottom = useCallback((smooth = true) => {
@@ -80,19 +115,70 @@ export default function MorphingNav() {
 
   const handleSend = async (textToSend?: string) => {
     const query = (textToSend || inputVal).trim();
-    if (!query || isTyping) return;
+    if (!query || isTyping || isSubmittingRef.current) return;
 
+    // Create user message
     const userMessage: Message = {
       id: `u-${crypto.randomUUID()}`,
       sender: "user",
       text: query,
       time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
     };
-
-    setMessages((prev) => [...prev, userMessage]);
+    // Update state: add user message, clear input, lock, set typing
+    const newMessages = [...messagesRef.current, userMessage];
+    setMessages(newMessages);
+    messagesRef.current = newMessages;
     setInputVal("");
     setIsLocked(true);
     setIsTyping(true);
+    isSubmittingRef.current = true;
+
+    // Generate request ID for stale response protection
+    const requestId = crypto.randomUUID();
+    latestRequestIdRef.current = requestId;
+
+    // Build history for API (exclude current user message, bounded)
+    // Only send complete user-assistant pairs; history should end with assistant
+    const historyForAPI = (() => {
+      const result: { role: "user" | "assistant"; content: string }[] = [];
+      // Build from completed successful exchanges only
+      // Exclude: welcome message, error/degraded notices, pending messages
+      for (let i = 0; i < messagesRef.current.length; i++) {
+        const m = messagesRef.current[i];
+        if (m.sender === "user") {
+          result.push({ role: "user", content: m.text });
+        } else if (m.sender === "agent" && m.source === "model") {
+          // Only include successful model responses in history
+          result.push({ role: "assistant", content: m.text });
+        }
+      }
+      // Remove the last user message (the one we just sent) from history
+      // since it's sent separately as the current question
+      const lastUserIndex = result.findLastIndex((m) => m.role === "user");
+      if (lastUserIndex >= 0) {
+        result.splice(lastUserIndex, 1);
+      }
+      // Bound to last 3 turns (6 messages) - but ensure we keep complete pairs
+      // and start with user, end with assistant
+      if (result.length > 6) {
+        // Remove from the front until we have at most 6, but ensure we start with user
+        const excess = result.length - 6;
+        // Remove pairs (user+assistant) from the front to preserve structure
+        const pairsToRemove = Math.ceil(excess / 2);
+        const messagesToRemove = pairsToRemove * 2;
+        result.splice(0, Math.min(messagesToRemove, result.length - 1));
+      }
+      // Ensure history starts with user and ends with assistant
+      // If it starts with assistant, remove the first message
+      if (result.length > 0 && result[0].role === "assistant") {
+        result.shift();
+      }
+      // If it ends with user, remove the last message
+      if (result.length > 0 && result[result.length - 1].role === "user") {
+        result.pop();
+      }
+      return result;
+    })();
 
     try {
       const res = await fetch("/api/chat", {
@@ -103,39 +189,75 @@ export default function MorphingNav() {
           latitude: locationState.latitude,
           longitude: locationState.longitude,
           locationName: locationState.displayName,
+          history: historyForAPI,
         }),
       });
 
-      if (!res.ok) {
-        throw new Error(`HTTP Error: ${res.status}`);
+      // Stale response protection: ignore if newer request started
+      if (latestRequestIdRef.current !== requestId) {
+        return;
       }
 
-      const data = await res.json();
-      const reply = data.reply || data.error || "No response received from agent.";
+      const data: ChatAPIResponse = await res.json();
 
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: `a-${crypto.randomUUID()}`,
-          sender: "agent",
-          text: reply,
-          time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-        },
-      ]);
+      // Handle non-2xx responses with structured error details
+      if (!res.ok) {
+        const errorMsg = data.error || data.reply || "Request failed";
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `a-${crypto.randomUUID()}`,
+            sender: "agent",
+            text: errorMsg,
+            time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+            source: "error",
+          },
+        ]);
+        return;
+      }
+
+      // Stale check again after await
+      if (latestRequestIdRef.current !== requestId) {
+        return;
+      }
+
+      // Add agent response with source for visual distinction
+      const agentMessage: Message = {
+        id: `a-${crypto.randomUUID()}`,
+        sender: "agent",
+        text: data.reply,
+        time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+        source: data.source,
+      };
+
+      setMessages((prev) => [...prev, agentMessage]);
     } catch (err: unknown) {
+      // Stale check
+      if (latestRequestIdRef.current !== requestId) {
+        return;
+      }
+
       console.error("Chat communication failure:", err);
       setMessages((prev) => [
         ...prev,
         {
           id: `a-${crypto.randomUUID()}`,
           sender: "agent",
-          text: "Unable to reach the backend service. Please check that NVIDIA_NIM_API_KEY is configured.",
+          text: "I couldn't connect to the weather service. Please check your connection and try again.",
           time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+          source: "error",
         },
       ]);
     } finally {
+      // Always clear typing and submitting state
       setIsTyping(false);
+      isSubmittingRef.current = false;
     }
+  };
+
+  // Handle suggestion click
+  const handleSuggestionClick = (suggestion: string) => {
+    handleSend(suggestion);
   };
 
   const locationLabel = locationState.displayName
@@ -234,7 +356,11 @@ export default function MorphingNav() {
                       className={`max-w-[85%] px-4 py-2.5 rounded-2xl text-[13px] leading-relaxed shadow-sm ${
                         m.sender === "user"
                           ? "bg-white text-neutral-950 font-medium rounded-br-sm"
-                          : "bg-white/8 text-white/90 border border-white/10 rounded-bl-sm"
+                          : m.source === "data_only"
+                            ? "bg-amber-900/30 text-amber-100 border border-amber-400/30 rounded-bl-sm"
+                            : m.source === "error"
+                              ? "bg-red-900/30 text-red-100 border border-red-400/30 rounded-bl-sm"
+                              : "bg-white/8 text-white/90 border border-white/10 rounded-bl-sm"
                       }`}
                     >
                       {m.text}
@@ -273,7 +399,7 @@ export default function MorphingNav() {
                   {PROMPT_SUGGESTIONS.map((prompt) => (
                     <button
                       key={prompt}
-                      onClick={() => handleSend(prompt)}
+                      onClick={() => handleSuggestionClick(prompt)}
                       className="text-[11px] whitespace-nowrap bg-white/6 hover:bg-white/12 text-white/70 hover:text-white border border-white/10 rounded-full px-3 py-1 transition-all cursor-pointer"
                     >
                       {prompt}

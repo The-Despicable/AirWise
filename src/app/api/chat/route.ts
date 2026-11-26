@@ -1,162 +1,318 @@
-// src/app/api/chat/route.ts
-
 import { NextRequest, NextResponse } from "next/server";
-import OpenAI from "openai";
-import { getEnvironmentalData, weatherCodeToCondition, aqiCategory, windDirectionToCompass } from "@/lib/environmental";
 
-const apiKey = process.env.NVIDIA_NIM_API_KEY;
+// Modules
+import {
+  validateChatRequest,
+  ChatRequest,
+  ChatResponse,
+  VALIDATION,
+} from "@/lib/chat-schemas";
+import { buildEnvContext, NormalizedEnv } from "@/lib/env-context";
+import { buildChatMessages } from "@/lib/message-builder";
+import {
+  createNIMAdapter,
+  nimChatComplete,
+  classifyNIMError,
+} from "@/lib/nim-adapter";
+import { parseFinalAnswer, isValidFinalAnswer, getFailureReason } from "@/lib/answer-parser";
+import {
+  buildDiagnostics,
+  logDiagnostics,
+  buildSuccessResponse,
+  buildDegradedResponse,
+  buildErrorResponse,
+  getHTTPStatus,
+  hasData,
+  DiagnosticReason,
+} from "@/lib/diagnostics";
+import { resolveLocationName } from "@/lib/geocode";
 
-// NVIDIA NIM hosted endpoint implements OpenAI Chat Completions API
-const nim = apiKey
-  ? new OpenAI({
-      baseURL: "https://integrate.api.nvidia.com/v1",
-      apiKey: apiKey,
-    })
-  : null;
+// In-memory rate limiter (per IP, sliding window)
+const RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute
+const RATE_LIMIT_MAX_REQUESTS = 20;
+const rateLimitMap = new Map<string, number[]>();
 
-// Helper to strip thinking tokens or unclosed reasoning blocks
-function extractCleanResponse(text: string): string {
-  if (!text) return "";
-
-  // 1. If closed </think> block is present, extract everything after </think>
-  if (text.includes("</think>")) {
-    const parts = text.split("</think>");
-    return parts[parts.length - 1].trim();
+function checkRateLimit(ip: string): boolean {
+  const now = Date.now();
+  const requests = rateLimitMap.get(ip) ?? [];
+  // Remove old entries outside window
+  const recent = requests.filter((t) => now - t < RATE_LIMIT_WINDOW_MS);
+  if (recent.length >= RATE_LIMIT_MAX_REQUESTS) {
+    return false;
   }
-
-  // 2. If an open </think> tag consumed the entire max_tokens budget without closing
-  if (text.startsWith("...")) {
-    const stripped = text.replace("...", "").trim();
-    const lines = stripped.split("\n").filter((l) => l.trim().length > 0);
-    return lines[lines.length - 1] || "";
-  }
-
-  // 3. Regex fallback for any inline reasoning tags
-  return text.replace(/...[\s\S]*?<\/...>/gi, "").trim();
+  recent.push(now);
+  rateLimitMap.set(ip, recent);
+  return true;
 }
 
-function validateCoordinate(
-  value: unknown,
-  name: string,
-  min: number,
-  max: number
-): { valid: number | null; error: string | null } {
-  if (value === null || value === undefined || value === "") {
-    return { valid: null, error: `${name} is required.` };
-  }
-  const num = Number(value);
-  if (!Number.isFinite(num)) {
-    return { valid: null, error: `${name} must be a finite number.` };
-  }
-  if (num < min || num > max) {
-    return { valid: null, error: `${name} must be between ${min} and ${max}.` };
-  }
-  return { valid: num, error: null };
+function getClientIP(req: NextRequest): string {
+  // In production, use proper proxy headers
+  const forwarded = req.headers.get("x-forwarded-for");
+  if (forwarded) return forwarded.split(",")[0].trim();
+  return "unknown";
 }
 
-export async function POST(req: NextRequest) {
-  try {
-    const body = await req.json();
-    const { message, latitude, longitude, locationName } = body;
+// Request body size limit (1 MB)
+const MAX_BODY_SIZE = 1024 * 1024;
 
-    if (!message || typeof message !== "string") {
-      return NextResponse.json({ error: "A valid message is required." }, { status: 400 });
-    }
+export async function POST(req: NextRequest): Promise<NextResponse> {
+  const requestId = crypto.randomUUID().slice(0, 8);
+  const startMs = Date.now();
 
-    // Validate optional coordinates
-    let resolvedLat = 17.385;
-    let resolvedLon = 78.4867;
-    let resolvedName = "Hyderabad, Telangana, India";
-    let isDefault = true;
-    let tz = "Asia/Kolkata";
-
-    const latValidation = validateCoordinate(latitude, "latitude", -90, 90);
-    const lonValidation = validateCoordinate(longitude, "longitude", -180, 180);
-
-    if (!latValidation.error && !lonValidation.error) {
-      resolvedLat = latValidation.valid!;
-      resolvedLon = lonValidation.valid!;
-      resolvedName = locationName || `${resolvedLat.toFixed(4)}, ${resolvedLon.toFixed(4)}`;
-      isDefault = false;
-    }
-
-    // 1. Fetch environmental data for the selected location
-    const env = await getEnvironmentalData(resolvedLat, resolvedLon, isDefault);
-    tz = env.timezone;
-
-    // 2. Build system prompt with actual location and temporal context
-    const aqiInfo = env.aqiUs !== null ? aqiCategory(env.aqiUs) : { category: "Unavailable", color: "" };
-    const windCompass = env.windDirection !== null ? windDirectionToCompass(env.windDirection) : "--";
-    const condition = env.weatherCode !== null ? weatherCodeToCondition(env.weatherCode) : "Unknown";
-
-    const systemPrompt = `/no_think
-You are the AirWise Climate & Lifestyle Assistant.
-
-LOCATION:
-- Selected Place: ${resolvedName}
-- Coordinates: ${resolvedLat.toFixed(4)}, ${resolvedLon.toFixed(4)}
-- Elevation: ${env.elevation !== null ? env.elevation + " m" : "Unavailable"}
-- Timezone: ${tz}
-${isDefault ? "- NOTE: Using default Hyderabad coordinates. User has not shared their location." : ""}
-
-TEMPORAL CONTEXT:
-- Current Date: ${env.formattedDate} (${env.dayOfWeek})
-- Current Time: ${env.formattedTime}
-
-CURRENT CONDITIONS (Open-Meteo model estimate):
-- Temperature: ${env.temperature !== null ? env.temperature + "°C" : "Unavailable"}
-- Feels Like: ${env.apparentTemperature !== null ? env.apparentTemperature + "°C" : "Unavailable"}
-- Condition: ${condition}
-- Humidity: ${env.humidity !== null ? env.humidity + "%" : "Unavailable"}
-- Wind: ${env.windSpeed !== null ? env.windSpeed + " km/h" : "Unavailable"} from ${windCompass}
-- Gusts: ${env.windGusts !== null ? env.windGusts + " km/h" : "Unavailable"}
-- Precipitation: ${env.precipitation !== null ? env.precipitation + " mm" : "Unavailable"}
-- Cloud Cover: ${env.cloudCover !== null ? env.cloudCover + "%" : "Unavailable"}
-- Surface Pressure: ${env.surfacePressure !== null ? env.surfacePressure + " hPa" : "Unavailable"}
-- Air Quality: ${env.aqiUs !== null ? "US AQI " + env.aqiUs + " (" + aqiInfo.category + ")" : "Unavailable"}
-  ${env.pm25 !== null ? "PM2.5: " + env.pm25 + " µg/m³" : ""}
-  ${env.pm10 !== null ? "PM10: " + env.pm10 + " µg/m³" : ""}
-
-IMPORTANT: These values are model-based estimates from Open-Meteo, not physical sensor readings or live radar. Do not present them as measured station data.
-
-BEHAVIOR RULES:
-1. DIRECT RELEVANCE: Directly answer the user's specific question about the selected location.
-2. TEMPORAL QUERIES: If asked about the day, date, or time, answer directly using the Temporal Context above.
-3. WEATHER QUERIES: Use the current conditions and forecast data above. Be honest about uncertainty — say "model estimate" when appropriate.
-4. HEALTH & ACTIVITIES: Use AQI to provide actionable advice for outdoor activities.
-5. GENERAL KNOWLEDGE: For non-weather questions, answer politely and factually.
-6. FORMAT: Respond directly in 2 to 3 natural, conversational sentences without internal thought tags.`;
-
-    if (!nim) {
-      return NextResponse.json({
-        reply: `[Demo Mode] ${resolvedName} reports ${env.temperature}°C, condition: ${condition}, AQI: ${env.aqiUs ?? "unavailable"}. Set NVIDIA_NIM_API_KEY in .env.local for full Nemotron 3.5 Lightning inference.`,
-        location: { latitude: resolvedLat, longitude: resolvedLon, name: resolvedName, isDefault },
-      });
-    }
-
-    // 3. Fast Inference with adequate token headroom
-    const completion = await nim.chat.completions.create({
-      model: "nvidia/nemotron-3.5-lightning-30b-a3b",
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: message },
-      ],
-      temperature: 0.2,
-      max_tokens: 800,
-    });
-
-    const rawOutput = completion.choices[0]?.message?.content || "";
-    const cleanReply = extractCleanResponse(rawOutput);
-
-    return NextResponse.json({
-      reply: cleanReply || `I don't have current weather details for ${resolvedName} right now.`,
-      location: { latitude: resolvedLat, longitude: resolvedLon, name: resolvedName, isDefault },
-    });
-  } catch (error: unknown) {
-    console.error("Nemotron 3.5 Lightning Error:", error);
+  // Rate limiting
+  const clientIP = getClientIP(req);
+  if (!checkRateLimit(clientIP)) {
+    const durationMs = Date.now() - startMs;
+    logDiagnostics(
+      buildDiagnostics(
+        requestId,
+        process.env.NIM_MODEL ?? "nvidia/nemotron-3.5-lightning-30b-a3b",
+        !!process.env.NVIDIA_NIM_API_KEY,
+        durationMs,
+        null,
+        null,
+        0,
+        0,
+        "error",
+        "upstream_rate_limit",
+        429,
+        0,
+        0
+      )
+    );
     return NextResponse.json(
-      { error: "NVIDIA NIM inference service encountered an error." },
-      { status: 500 }
+      buildErrorResponse(requestId, "upstream_rate_limit", "Rate limit exceeded. Please try again."),
+      { status: 429 }
     );
   }
+
+  // Read body with size limit
+  let bodyText: string;
+  try {
+    const contentLength = req.headers.get("content-length");
+    if (contentLength && Number(contentLength) > MAX_BODY_SIZE) {
+      throw new Error("Body too large");
+    }
+    bodyText = await req.text();
+    if (bodyText.length > MAX_BODY_SIZE) {
+      throw new Error("Body too large");
+    }
+  } catch {
+    const durationMs = Date.now() - startMs;
+    logDiagnostics(
+      buildDiagnostics(
+        requestId,
+        process.env.NIM_MODEL ?? "nvidia/nemotron-3.5-lightning-30b-a3b",
+        !!process.env.NVIDIA_NIM_API_KEY,
+        durationMs,
+        null,
+        null,
+        0,
+        0,
+        "error",
+        "validation_error",
+        413,
+        0,
+        0
+      )
+    );
+    return NextResponse.json(
+      buildErrorResponse(requestId, "validation_error", "Request body too large."),
+      { status: 413 }
+    );
+  }
+
+  // Parse and validate request
+  let body: unknown;
+  try {
+    body = JSON.parse(bodyText);
+  } catch {
+    const durationMs = Date.now() - startMs;
+    logDiagnostics(
+      buildDiagnostics(
+        requestId,
+        process.env.NIM_MODEL ?? "nvidia/nemotron-3.5-lightning-30b-a3b",
+        !!process.env.NVIDIA_NIM_API_KEY,
+        durationMs,
+        null,
+        null,
+        0,
+        0,
+        "error",
+        "validation_error",
+        400,
+        0,
+        0
+      )
+    );
+    return NextResponse.json(
+      buildErrorResponse(requestId, "validation_error", "Invalid JSON body."),
+      { status: 400 }
+    );
+  }
+
+  const validation = validateChatRequest(body);
+  if (!validation.ok) {
+    const durationMs = Date.now() - startMs;
+    logDiagnostics(
+      buildDiagnostics(
+        requestId,
+        process.env.NIM_MODEL ?? "nvidia/nemotron-3.5-lightning-30b-a3b",
+        !!process.env.NVIDIA_NIM_API_KEY,
+        durationMs,
+        null,
+        null,
+        0,
+        0,
+        "error",
+        "validation_error",
+        400,
+        0,
+        0
+      )
+    );
+    return NextResponse.json(
+      buildErrorResponse(requestId, "validation_error", validation.error!),
+      { status: 400 }
+    );
+  }
+
+  const chatReq: ChatRequest = validation.data!;
+
+  // Resolve location name (independent of conversation history)
+  let resolvedName: string;
+  let isDefault = false;
+
+  if (chatReq.locationName) {
+    resolvedName = chatReq.locationName;
+    isDefault = chatReq.locationName.includes("(default)");
+  } else {
+    resolvedName = await resolveLocationName(chatReq.latitude, chatReq.longitude);
+    isDefault = resolvedName.includes("(default)");
+  }
+  // Build authoritative environmental snapshot
+  const env: NormalizedEnv = await buildEnvContext(
+    chatReq.latitude,
+    chatReq.longitude,
+    resolvedName,
+    isDefault
+  );
+
+  // Build messages: system + bounded history + current user with context
+  const { messages } = buildChatMessages(
+    chatReq.message,
+    env,
+    chatReq.history ?? [],
+    VALIDATION.HISTORY_MAX_TURNS
+  );
+
+  // NIM adapter
+  const { client, config } = createNIMAdapter();
+  const modelId = config.model;
+
+  let source: "model" | "data_only" | "error" = "error";
+  let reason: DiagnosticReason = "upstream_error";
+  let finishReason: string | null = null;
+  let usage: { promptTokens: number; completionTokens: number; totalTokens: number } | null = null;
+  let contentLength = 0;
+  let reasoningLength = 0;
+  let reply: string | null = null;
+  let httpStatus = 502;
+  try {
+    if (!client) {
+      source = "data_only";
+      reason = "unavailable";
+    } else {
+      const nimResult = await nimChatComplete(client, config, messages, requestId);
+
+      contentLength = nimResult.content.length;
+      finishReason = nimResult.finishReason;
+      usage = nimResult.usage;
+      reasoningLength = 0; // Will be set by parser
+
+      // Parse final answer
+      const parseResult = parseFinalAnswer(nimResult.content);
+      reasoningLength = parseResult.reasoningLength;
+
+      if (isValidFinalAnswer(parseResult)) {
+        source = "model";
+        reason = "ok";
+        reply = parseResult.finalAnswer!;
+      } else {
+        source = "data_only";
+        reason = getFailureReason(parseResult, finishReason as "stop" | "length" | null);
+        reply = null;
+      }
+    }
+  } catch (err) {
+    const classified = classifyNIMError(err);
+    httpStatus = classified.status ?? 502;
+    reason = classified.reason;
+    source = "data_only";
+    reply = null;
+  }
+
+  const durationMs = Date.now() - startMs;
+
+  // Build response based on source
+  const location = {
+    latitude: chatReq.latitude,
+    longitude: chatReq.longitude,
+    name: resolvedName,
+    isDefault,
+  };
+
+  const dataSummary = {
+    location: env.displayName,
+    temperature: env.temperature,
+    apparentTemperature: env.apparentTemperature,
+    humidity: env.humidity,
+    condition: env.condition,
+    windSpeed: env.windSpeed,
+    windCompass: env.windCompass,
+    aqiUs: env.aqiUs,
+    aqiCategory: env.aqiCategory,
+    pm25: env.pm25,
+    pm10: env.pm10,
+    isDefault: env.isDefault,
+    fetchedAt: env.fetchedAt,
+    validTime: env.validTime,
+    airQualityAvailable: env.airQualityAvailable,
+    airQualityError: env.airQualityError,
+  };
+
+  const dataAvailable = hasData(env);
+
+  // Diagnostics
+  const diagMeta = buildDiagnostics(
+    requestId,
+    modelId,
+    !!client,
+    durationMs,
+    finishReason,
+    usage,
+    contentLength,
+    reasoningLength,
+    source,
+    reason,
+    httpStatus,
+    chatReq.latitude,
+    chatReq.longitude
+  );
+  logDiagnostics(diagMeta);
+
+  // Build appropriate response
+  let response: ChatResponse;
+  if (source === "model" && reply) {
+    response = buildSuccessResponse(requestId, reply, location, dataSummary);
+    httpStatus = 200;
+  } else if (source === "data_only") {
+    response = buildDegradedResponse(requestId, location, dataSummary, reason, dataAvailable);
+    httpStatus = getHTTPStatus("data_only", reason);
+  } else {
+    response = buildErrorResponse(requestId, reason, "NVIDIA NIM inference service encountered an error.");
+    httpStatus = getHTTPStatus("error", reason);
+  }
+
+  return NextResponse.json(response, { status: httpStatus });
 }

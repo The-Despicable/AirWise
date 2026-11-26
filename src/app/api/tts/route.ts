@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-const VOICE_ID = "kYPR50VCNKK6L89q8w6Y";
+const VOICE_ID = "FGY2WhTYpPnrIDTdsKH5";
 
 export async function POST(req: NextRequest) {
   try {
@@ -32,8 +32,10 @@ export async function POST(req: NextRequest) {
           text: cleanText,
           model_id: "eleven_turbo_v2_5", // low latency model
           voice_settings: {
-            stability: 0.5,
-            similarity_boost: 0.75,
+            stability: 0.45,
+            similarity_boost: 0.8,
+            style: 0.15,
+            use_speaker_boost: true,
           },
         }),
       }
